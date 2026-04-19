@@ -172,7 +172,7 @@ class Pipeline:
         # LOO-CV joint sweep over alpha (mean-delta scale) and beta (coexpression
         # propagation strength).
         candidate_alphas = [0.0, 1.0, 2.0, 3.0]
-        candidate_betas = [0.0, 0.25, 0.5, 1.0]
+        candidate_betas = [0.5, 1.0, 1.5, 2.0, 3.0]
         best_alpha, best_beta, best_score = 1.0, 0.0, -np.inf
         if deltas and self.avg_target_delta is not None:
             for alpha in candidate_alphas:
