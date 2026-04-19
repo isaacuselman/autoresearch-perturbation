@@ -164,6 +164,6 @@ class Pipeline:
                 tgt = _resolve_target_index(p, self.var_names, self.gene_names)
                 if tgt is not None:
                     pred = pred.copy()
-                    pred[tgt] = control_mean[tgt] + self.avg_target_delta
+                    pred[tgt] = max(0.0, control_mean[tgt] + self.avg_target_delta)
             out[p] = pred
         return out
