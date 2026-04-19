@@ -58,12 +58,31 @@ def _to_dense_mean(adata_slice) -> np.ndarray:
     return np.asarray(x).mean(axis=0).flatten()
 
 
+def _trim_mean_excl(deltas_arr: np.ndarray, exclude_idx: int, prop: float = 0.1) -> np.ndarray:
+    mask = np.ones(deltas_arr.shape[0], dtype=bool)
+    mask[exclude_idx] = False
+    return _stats.trim_mean(deltas_arr[mask], proportiontocut=prop, axis=0)
+
+
+def _pearson_top_de(pred_delta: np.ndarray, actual_delta: np.ndarray, k: int = 200) -> float:
+    k = min(k, actual_delta.size)
+    de_idx = np.argsort(np.abs(actual_delta))[-k:]
+    p = pred_delta[de_idx]
+    a = actual_delta[de_idx]
+    if p.std() < 1e-10 or a.std() < 1e-10:
+        return 0.0
+    p = (p - p.mean()) / p.std()
+    a = (a - a.mean()) / a.std()
+    return float((p * a).mean())
+
+
 class Pipeline:
     def __init__(self):
         self.mean_delta: np.ndarray | None = None
         self.avg_target_delta: float | None = None
         self.var_names: list[str] | None = None
         self.gene_names: list[str] | None = None
+        self.alpha: float = 3.0
 
     def fit(self, train_adata) -> None:
         control_mask = train_adata.obs["perturbation"] == "control"
@@ -91,15 +110,43 @@ class Pipeline:
             if tgt is not None:
                 target_drops.append(float(mean_p[tgt] - control_mean[tgt]))
 
-        self.mean_delta = (
-            _stats.trim_mean(np.asarray(deltas), proportiontocut=0.1, axis=0)
-            if deltas
-            else np.zeros_like(control_mean)
-        )
+        if deltas:
+            deltas_arr = np.asarray(deltas)
+            self.mean_delta = _stats.trim_mean(
+                deltas_arr, proportiontocut=0.1, axis=0
+            )
+        else:
+            deltas_arr = np.zeros((0, len(control_mean)))
+            self.mean_delta = np.zeros_like(control_mean)
         self.avg_target_delta = (
             float(np.median(target_drops)) if target_drops else None
         )
         self._control_mean = control_mean
+
+        # LOO-CV alpha sweep on training perts only.
+        train_target_idx = [
+            _resolve_target_index(p, self.var_names, self.gene_names)
+            for p in train_perts
+        ]
+        candidate_alphas = [0.0, 1.0, 2.0, 3.0, 4.0, 5.0]
+        best_alpha, best_score = 3.0, -np.inf
+        if deltas and self.avg_target_delta is not None:
+            for alpha in candidate_alphas:
+                rs = []
+                for i, p in enumerate(train_perts):
+                    md_loo = _trim_mean_excl(deltas_arr, i, prop=0.1)
+                    pred_delta = alpha * md_loo
+                    tgt = train_target_idx[i]
+                    if tgt is not None:
+                        pred_delta = pred_delta.copy()
+                        pred_delta[tgt] = self.avg_target_delta
+                    rs.append(_pearson_top_de(pred_delta, deltas_arr[i]))
+                mean_r = float(np.mean(rs)) if rs else -np.inf
+                if mean_r > best_score:
+                    best_score, best_alpha = mean_r, alpha
+        self.alpha = best_alpha
+        # Print for visibility in run.log
+        print(f"loo_alpha: {self.alpha:.2f}  loo_pearson: {best_score:.4f}", flush=True)
 
     def predict(
         self,
@@ -110,10 +157,9 @@ class Pipeline:
         if self.mean_delta is None:
             raise RuntimeError("Pipeline not fit.")
 
-        alpha = 3.0  # exp7: boost non-target delta magnitude
         out: dict[str, np.ndarray] = {}
         for p in test_perts:
-            pred = control_mean + alpha * self.mean_delta
+            pred = control_mean + self.alpha * self.mean_delta
             if self.avg_target_delta is not None:
                 tgt = _resolve_target_index(p, self.var_names, self.gene_names)
                 if tgt is not None:
