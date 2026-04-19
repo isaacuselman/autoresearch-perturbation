@@ -17,38 +17,56 @@ import numpy as np
 from scipy import stats as _stats
 
 
-def _resolve_target_index(pert: str, var_names: list[str], gene_names: list[str]) -> Optional[int]:
-    """Try to map a perturbation label to a single gene column index.
+def _resolve_target_indices(
+    pert: str,
+    name_to_idx: dict[str, int],
+) -> list[int]:
+    """Map a perturbation label to one or more gene column indices.
 
-    Strategies, in order:
-      1. Direct match against var_names.
-      2. Direct match against var.gene_name.
-      3. Stripping common prefixes/suffixes ('pert_gene_', '+ctrl', etc.).
-      4. Extracting a trailing integer (handles synthetic 'pert_gene_<n>').
+    Handles:
+      - single gene: 'FOXA1' or 'pert_gene_42' or 'guide_FOXA1'
+      - dual perturbations: 'GENE1+GENE2' (each side resolved independently)
+      - control suffixes: 'GENE+ctrl' / 'GENE_ctrl' / 'GENE+control'
+      - synthetic 'pert_gene_<n>': trailing integer is the gene index
     """
-    if pert in var_names:
-        return var_names.index(pert)
-    if pert in gene_names:
-        return gene_names.index(pert)
+    if pert == "control" or pert == "":
+        return []
 
-    stripped = pert
-    for prefix in ("pert_gene_", "pert_", "guide_", "sg"):
-        if stripped.startswith(prefix):
-            stripped = stripped[len(prefix):]
-    for suffix in ("+ctrl", "_ctrl", "+control"):
-        if stripped.endswith(suffix):
-            stripped = stripped[: -len(suffix)]
-    if stripped in var_names:
-        return var_names.index(stripped)
-    if stripped in gene_names:
-        return gene_names.index(stripped)
+    parts = pert.split("+") if "+" in pert else [pert]
+    out: list[int] = []
+    seen: set[int] = set()
+    for part in parts:
+        token = part.strip()
+        if token in {"ctrl", "control", ""}:
+            continue
+        for prefix in ("pert_gene_", "pert_", "guide_", "sg"):
+            if token.startswith(prefix):
+                token = token[len(prefix):]
+        for suffix in ("_ctrl",):
+            if token.endswith(suffix):
+                token = token[: -len(suffix)]
+        idx = name_to_idx.get(token)
+        # synthetic fallback: 'pert_gene_<n>' tokens are pure integers post-strip
+        if idx is None and token.isdigit():
+            i = int(token)
+            n = max(name_to_idx.values()) + 1 if name_to_idx else 0
+            if 0 <= i < n:
+                idx = i
+        if idx is not None and idx not in seen:
+            out.append(idx)
+            seen.add(idx)
+    return out
 
-    m = re.search(r"(\d+)$", stripped)
-    if m:
-        idx = int(m.group(1))
-        if 0 <= idx < len(var_names):
-            return idx
-    return None
+
+def _resolve_target_index(
+    pert: str, var_names: list[str], gene_names: list[str]
+) -> Optional[int]:
+    """Backward-compatible single-target resolver. Returns first match or None."""
+    name_to_idx: dict[str, int] = {n: i for i, n in enumerate(var_names)}
+    for i, gn in enumerate(gene_names):
+        name_to_idx.setdefault(gn, i)
+    idxs = _resolve_target_indices(pert, name_to_idx)
+    return idxs[0] if idxs else None
 
 
 def _to_dense_mean(adata_slice) -> np.ndarray:
@@ -100,15 +118,29 @@ class Pipeline:
         else:
             self.gene_names = list(self.var_names)
 
+        # Combined name → index map (var_names overrides gene_names if both present).
+        self._name_to_idx = {n: i for i, n in enumerate(self.var_names)}
+        for i, gn in enumerate(self.gene_names):
+            self._name_to_idx.setdefault(gn, i)
+
         deltas = []
-        target_drops = []  # post[target] - control_mean[target] per train pert
+        target_drops = []  # post[target] - control_mean[target] per (train pert, target gene)
+        train_target_idxs: list[list[int]] = []
         for p in train_perts:
             mask = train_adata.obs["perturbation"] == p
             mean_p = _to_dense_mean(train_adata[mask])
             deltas.append(mean_p - control_mean)
-            tgt = _resolve_target_index(p, self.var_names, self.gene_names)
-            if tgt is not None:
+            idxs = _resolve_target_indices(p, self._name_to_idx)
+            train_target_idxs.append(idxs)
+            for tgt in idxs:
                 target_drops.append(float(mean_p[tgt] - control_mean[tgt]))
+
+        n_resolved = sum(1 for x in train_target_idxs if x)
+        print(
+            f"resolver: {n_resolved}/{len(train_perts)} train perts have ≥1 resolved target; "
+            f"{sum(len(x) for x in train_target_idxs)} target-gene observations",
+            flush=True,
+        )
 
         if deltas:
             deltas_arr = np.asarray(deltas)
@@ -123,29 +155,25 @@ class Pipeline:
         )
         self._control_mean = control_mean
 
-        # LOO-CV alpha sweep on training perts only.
-        train_target_idx = [
-            _resolve_target_index(p, self.var_names, self.gene_names)
-            for p in train_perts
-        ]
+        # LOO-CV alpha sweep, with multi-target override.
         candidate_alphas = [0.0, 1.0, 2.0, 3.0, 4.0, 5.0]
-        best_alpha, best_score = 3.0, -np.inf
+        best_alpha, best_score = 1.0, -np.inf
         if deltas and self.avg_target_delta is not None:
             for alpha in candidate_alphas:
                 rs = []
-                for i, p in enumerate(train_perts):
+                for i in range(len(train_perts)):
                     md_loo = _trim_mean_excl(deltas_arr, i, prop=0.1)
                     pred_delta = alpha * md_loo
-                    tgt = train_target_idx[i]
-                    if tgt is not None:
+                    if train_target_idxs[i]:
                         pred_delta = pred_delta.copy()
-                        pred_delta[tgt] = self.avg_target_delta
+                        for tgt in train_target_idxs[i]:
+                            pred_post = max(0.0, control_mean[tgt] + self.avg_target_delta)
+                            pred_delta[tgt] = pred_post - control_mean[tgt]
                     rs.append(_pearson_top_de(pred_delta, deltas_arr[i]))
                 mean_r = float(np.mean(rs)) if rs else -np.inf
                 if mean_r > best_score:
                     best_score, best_alpha = mean_r, alpha
         self.alpha = best_alpha
-        # Print for visibility in run.log
         print(f"loo_alpha: {self.alpha:.2f}  loo_pearson: {best_score:.4f}", flush=True)
 
     def predict(
@@ -161,9 +189,10 @@ class Pipeline:
         for p in test_perts:
             pred = control_mean + self.alpha * self.mean_delta
             if self.avg_target_delta is not None:
-                tgt = _resolve_target_index(p, self.var_names, self.gene_names)
-                if tgt is not None:
+                idxs = _resolve_target_indices(p, self._name_to_idx)
+                if idxs:
                     pred = pred.copy()
-                    pred[tgt] = max(0.0, control_mean[tgt] + self.avg_target_delta)
+                    for tgt in idxs:
+                        pred[tgt] = max(0.0, control_mean[tgt] + self.avg_target_delta)
             out[p] = pred
         return out
