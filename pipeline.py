@@ -169,36 +169,58 @@ class Pipeline:
         )
         self._control_mean = control_mean
 
-        # LOO-CV joint sweep over alpha (mean-delta scale) and beta (coexpression
-        # propagation strength).
-        candidate_alphas = [0.0, 1.0, 2.0, 3.0]
-        candidate_betas = [0.5, 1.0, 1.5, 2.0, 3.0]
-        best_alpha, best_beta, best_score = 1.0, 0.0, -np.inf
+        # Gene-gene correlation in training delta space
+        # (captures co-perturbation patterns, not just baseline coexpression).
+        if len(deltas_arr) >= 3:
+            d_centered = deltas_arr - deltas_arr.mean(axis=0, keepdims=True)
+            d_std = d_centered.std(axis=0)
+            d_std_safe = np.where(d_std < 1e-10, 1.0, d_std)
+            d_normed = d_centered / d_std_safe
+            n_d = deltas_arr.shape[0]
+            delta_corr = (d_normed.T @ d_normed) / max(1, n_d - 1)
+            delta_corr = np.nan_to_num(delta_corr, nan=0.0)
+            np.fill_diagonal(delta_corr, 0.0)
+            self._delta_corr = delta_corr
+        else:
+            self._delta_corr = np.zeros_like(self._gene_corr)
+
+        # LOO-CV joint sweep: alpha (mean-delta scale), beta (control-corr
+        # propagation), gamma (delta-corr propagation).
+        candidate_alphas = [0.0, 1.0, 2.0]
+        candidate_betas = [0.0, 1.0, 1.5, 2.0]
+        candidate_gammas = [0.0, 0.5, 1.0, 1.5]
+        best_alpha, best_beta, best_gamma, best_score = 1.0, 0.0, 0.0, -np.inf
         if deltas and self.avg_target_delta is not None:
             for alpha in candidate_alphas:
                 for beta in candidate_betas:
-                    rs = []
-                    for i in range(len(train_perts)):
-                        md_loo = _trim_mean_excl(deltas_arr, i, prop=0.1)
-                        pred_delta = alpha * md_loo
-                        if train_target_idxs[i]:
-                            propagated = np.zeros_like(pred_delta)
-                            for tgt in train_target_idxs[i]:
-                                propagated += self._gene_corr[tgt] * self.avg_target_delta
-                            pred_delta = pred_delta + beta * propagated
-                            pred_delta = pred_delta.copy()
-                            for tgt in train_target_idxs[i]:
-                                pred_post = max(0.0, control_mean[tgt] + self.avg_target_delta)
-                                pred_delta[tgt] = pred_post - control_mean[tgt]
-                        rs.append(_pearson_top_de(pred_delta, deltas_arr[i]))
-                    mean_r = float(np.mean(rs)) if rs else -np.inf
-                    if mean_r > best_score:
-                        best_score, best_alpha, best_beta = mean_r, alpha, beta
+                    for gamma in candidate_gammas:
+                        rs = []
+                        for i in range(len(train_perts)):
+                            md_loo = _trim_mean_excl(deltas_arr, i, prop=0.1)
+                            pred_delta = alpha * md_loo
+                            if train_target_idxs[i]:
+                                prop_ctrl = np.zeros_like(pred_delta)
+                                prop_delta = np.zeros_like(pred_delta)
+                                for tgt in train_target_idxs[i]:
+                                    prop_ctrl += self._gene_corr[tgt] * self.avg_target_delta
+                                    prop_delta += self._delta_corr[tgt] * self.avg_target_delta
+                                pred_delta = pred_delta + beta * prop_ctrl + gamma * prop_delta
+                                pred_delta = pred_delta.copy()
+                                for tgt in train_target_idxs[i]:
+                                    pred_post = max(0.0, control_mean[tgt] + self.avg_target_delta)
+                                    pred_delta[tgt] = pred_post - control_mean[tgt]
+                            rs.append(_pearson_top_de(pred_delta, deltas_arr[i]))
+                        mean_r = float(np.mean(rs)) if rs else -np.inf
+                        if mean_r > best_score:
+                            best_score, best_alpha, best_beta, best_gamma = (
+                                mean_r, alpha, beta, gamma
+                            )
         self.alpha = best_alpha
         self.beta = best_beta
+        self.gamma = best_gamma
         print(
             f"loo_alpha: {self.alpha:.2f}  loo_beta: {self.beta:.2f}  "
-            f"loo_pearson: {best_score:.4f}",
+            f"loo_gamma: {self.gamma:.2f}  loo_pearson: {best_score:.4f}",
             flush=True,
         )
 
@@ -217,11 +239,13 @@ class Pipeline:
             if self.avg_target_delta is not None:
                 idxs = _resolve_target_indices(p, self._name_to_idx)
                 if idxs:
-                    if self.beta > 0:
-                        propagated = np.zeros_like(pred)
+                    if self.beta > 0 or self.gamma > 0:
+                        prop_ctrl = np.zeros_like(pred)
+                        prop_delta = np.zeros_like(pred)
                         for tgt in idxs:
-                            propagated += self._gene_corr[tgt] * self.avg_target_delta
-                        pred = pred + self.beta * propagated
+                            prop_ctrl += self._gene_corr[tgt] * self.avg_target_delta
+                            prop_delta += self._delta_corr[tgt] * self.avg_target_delta
+                        pred = pred + self.beta * prop_ctrl + self.gamma * prop_delta
                     pred = pred.copy()
                     for tgt in idxs:
                         pred[tgt] = max(0.0, control_mean[tgt] + self.avg_target_delta)
