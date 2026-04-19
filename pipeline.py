@@ -14,6 +14,7 @@ import re
 from typing import Optional
 
 import numpy as np
+from scipy import stats as _stats
 
 
 def _resolve_target_index(pert: str, var_names: list[str], gene_names: list[str]) -> Optional[int]:
@@ -91,7 +92,7 @@ class Pipeline:
                 target_drops.append(float(mean_p[tgt] - control_mean[tgt]))
 
         self.mean_delta = (
-            np.median(np.asarray(deltas), axis=0)
+            _stats.trim_mean(np.asarray(deltas), proportiontocut=0.1, axis=0)
             if deltas
             else np.zeros_like(control_mean)
         )
