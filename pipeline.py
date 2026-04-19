@@ -169,19 +169,26 @@ class Pipeline:
         )
         self._control_mean = control_mean
 
-        # Gene-gene correlation in training delta space
-        # (captures co-perturbation patterns, not just baseline coexpression).
+        # Conditional expectation kernel: beta_jg = cov(delta[:,g], delta[:,j])
+        #                                          / var(delta[:,g])
+        # E[delta[j] | delta[g] = x] ≈ mean_delta[j] + beta_jg * (x - mean_delta[g])
         if len(deltas_arr) >= 3:
             d_centered = deltas_arr - deltas_arr.mean(axis=0, keepdims=True)
-            d_std = d_centered.std(axis=0)
-            d_std_safe = np.where(d_std < 1e-10, 1.0, d_std)
-            d_normed = d_centered / d_std_safe
             n_d = deltas_arr.shape[0]
-            delta_corr = (d_normed.T @ d_normed) / max(1, n_d - 1)
-            delta_corr = np.nan_to_num(delta_corr, nan=0.0)
-            np.fill_diagonal(delta_corr, 0.0)
-            self._delta_corr = delta_corr
+            delta_cov = (d_centered.T @ d_centered) / max(1, n_d - 1)
+            delta_cov = np.nan_to_num(delta_cov, nan=0.0)
+            d_var = np.diag(delta_cov).copy()
+            d_var_safe = np.where(d_var < 1e-10, 1.0, d_var)
+            # beta[g, j] = delta_cov[g, j] / var(g)  → shape (n_genes, n_genes)
+            self._beta_kernel = delta_cov / d_var_safe[:, None]
+            np.fill_diagonal(self._beta_kernel, 0.0)
+            # Keep delta_corr around in case downstream experiments need it.
+            d_std = np.sqrt(d_var_safe)
+            self._delta_corr = (delta_cov / d_std[:, None]) / d_std[None, :]
+            self._delta_corr = np.nan_to_num(self._delta_corr, nan=0.0)
+            np.fill_diagonal(self._delta_corr, 0.0)
         else:
+            self._beta_kernel = np.zeros_like(self._gene_corr)
             self._delta_corr = np.zeros_like(self._gene_corr)
 
         # LOO-CV joint sweep: alpha (mean-delta scale), beta (control-corr
@@ -203,7 +210,7 @@ class Pipeline:
                                 prop_delta = np.zeros_like(pred_delta)
                                 for tgt in train_target_idxs[i]:
                                     prop_ctrl += self._gene_corr[tgt] * self.avg_target_delta
-                                    prop_delta += self._delta_corr[tgt] * self.avg_target_delta
+                                    prop_delta += self._beta_kernel[tgt] * self.avg_target_delta
                                 pred_delta = pred_delta + beta * prop_ctrl + gamma * prop_delta
                                 pred_delta = pred_delta.copy()
                                 for tgt in train_target_idxs[i]:
