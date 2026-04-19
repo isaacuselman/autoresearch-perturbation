@@ -11,10 +11,38 @@ can't be resolved.
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
 from scipy import stats as _stats
+
+_SCGPT_EMB_PATH = (
+    Path.home() / ".cache" / "autoresearch-perturbation" / "embeddings" / "scgpt_hvg_emb.npy"
+)
+
+
+def _load_scgpt_kernel(n_genes: int) -> np.ndarray | None:
+    """Cosine-similarity matrix between scGPT pretrained gene embeddings.
+    Returns (n_genes, n_genes) float32 or None if cache missing.
+    Diagonal zeroed; rows for genes missing from scGPT vocab become all-zero.
+    """
+    if not _SCGPT_EMB_PATH.exists():
+        return None
+    emb = np.load(_SCGPT_EMB_PATH).astype(np.float32)
+    if emb.shape[0] != n_genes:
+        return None
+    norms = np.linalg.norm(emb, axis=1)
+    norms_safe = np.where(norms < 1e-10, 1.0, norms)
+    normed = emb / norms_safe[:, None]
+    sim = (normed @ normed.T).astype(np.float32)
+    sim = np.nan_to_num(sim, nan=0.0)
+    np.fill_diagonal(sim, 0.0)
+    missing = norms < 1e-10
+    if missing.any():
+        sim[missing, :] = 0.0
+        sim[:, missing] = 0.0
+    return sim
 
 
 def _resolve_target_indices(
@@ -169,6 +197,16 @@ class Pipeline:
         )
         self._control_mean = control_mean
 
+        # scGPT pretrained gene-embedding cosine kernel.
+        scgpt_kernel = _load_scgpt_kernel(len(control_mean))
+        if scgpt_kernel is not None:
+            self._scgpt_kernel = scgpt_kernel
+            n_hits = int((np.linalg.norm(scgpt_kernel, axis=1) > 0).sum())
+            print(f"scgpt: kernel loaded ({n_hits}/{len(control_mean)} genes covered)", flush=True)
+        else:
+            self._scgpt_kernel = None
+            print("scgpt: no precomputed embeddings (skipping)", flush=True)
+
         # Conditional expectation kernel: beta_jg = cov(delta[:,g], delta[:,j])
         #                                          / var(delta[:,g])
         # E[delta[j] | delta[g] = x] ≈ mean_delta[j] + beta_jg * (x - mean_delta[g])
@@ -191,27 +229,30 @@ class Pipeline:
             self._beta_kernel = np.zeros_like(self._gene_corr)
             self._delta_corr = np.zeros_like(self._gene_corr)
 
-        # LOO-CV joint sweep: alpha (mean-delta scale), beta (control-corr
-        # propagation), gamma (delta-corr propagation).
+        # LOO-CV joint sweep: alpha (mean_delta scale), gamma (delta_corr kernel
+        # weight, matching predict()), delta_w (scGPT cosine kernel weight).
+        # beta (control-corr) was consistently dominated by delta-space kernels;
+        # dropped from the sweep.
         candidate_alphas = [0.0, 1.0, 2.0]
-        candidate_betas = [0.0, 1.0, 1.5, 2.0]
         candidate_gammas = [0.0, 0.5, 1.0, 1.5]
-        best_alpha, best_beta, best_gamma, best_score = 1.0, 0.0, 0.0, -np.inf
+        candidate_deltas = [0.0, 0.5, 1.0, 2.0, 4.0]
+        best_alpha, best_gamma, best_delta_w, best_score = 1.0, 0.5, 0.0, -np.inf
         if deltas and self.avg_target_delta is not None:
             for alpha in candidate_alphas:
-                for beta in candidate_betas:
-                    for gamma in candidate_gammas:
+                for gamma in candidate_gammas:
+                    for delta_w in candidate_deltas:
                         rs = []
                         for i in range(len(train_perts)):
                             md_loo = _trim_mean_excl(deltas_arr, i, prop=0.1)
                             pred_delta = alpha * md_loo
                             if train_target_idxs[i]:
-                                prop_ctrl = np.zeros_like(pred_delta)
-                                prop_delta = np.zeros_like(pred_delta)
+                                prop_d = np.zeros_like(pred_delta)
+                                prop_s = np.zeros_like(pred_delta)
                                 for tgt in train_target_idxs[i]:
-                                    prop_ctrl += self._gene_corr[tgt] * self.avg_target_delta
-                                    prop_delta += self._beta_kernel[tgt] * self.avg_target_delta
-                                pred_delta = pred_delta + beta * prop_ctrl + gamma * prop_delta
+                                    prop_d += self._delta_corr[tgt] * self.avg_target_delta
+                                    if self._scgpt_kernel is not None:
+                                        prop_s += self._scgpt_kernel[tgt] * self.avg_target_delta
+                                pred_delta = pred_delta + gamma * prop_d + delta_w * prop_s
                                 pred_delta = pred_delta.copy()
                                 for tgt in train_target_idxs[i]:
                                     pred_post = max(0.0, control_mean[tgt] + self.avg_target_delta)
@@ -219,15 +260,15 @@ class Pipeline:
                             rs.append(_pearson_top_de(pred_delta, deltas_arr[i]))
                         mean_r = float(np.mean(rs)) if rs else -np.inf
                         if mean_r > best_score:
-                            best_score, best_alpha, best_beta, best_gamma = (
-                                mean_r, alpha, beta, gamma
-                            )
+                            best_score = mean_r
+                            best_alpha, best_gamma, best_delta_w = alpha, gamma, delta_w
         self.alpha = best_alpha
-        self.beta = best_beta
+        self.beta = 0.0
         self.gamma = best_gamma
+        self.delta_w = best_delta_w
         print(
-            f"loo_alpha: {self.alpha:.2f}  loo_beta: {self.beta:.2f}  "
-            f"loo_gamma: {self.gamma:.2f}  loo_pearson: {best_score:.4f}",
+            f"loo_alpha: {self.alpha:.2f}  loo_gamma: {self.gamma:.2f}  "
+            f"loo_delta_w: {self.delta_w:.2f}  loo_pearson: {best_score:.4f}",
             flush=True,
         )
 
@@ -246,13 +287,14 @@ class Pipeline:
             if self.avg_target_delta is not None:
                 idxs = _resolve_target_indices(p, self._name_to_idx)
                 if idxs:
-                    if self.beta > 0 or self.gamma > 0:
-                        prop_ctrl = np.zeros_like(pred)
-                        prop_delta = np.zeros_like(pred)
+                    if self.gamma > 0 or self.delta_w > 0:
+                        prop_d = np.zeros_like(pred)
+                        prop_s = np.zeros_like(pred)
                         for tgt in idxs:
-                            prop_ctrl += self._gene_corr[tgt] * self.avg_target_delta
-                            prop_delta += self._delta_corr[tgt] * self.avg_target_delta
-                        pred = pred + self.beta * prop_ctrl + self.gamma * prop_delta
+                            prop_d += self._delta_corr[tgt] * self.avg_target_delta
+                            if self._scgpt_kernel is not None:
+                                prop_s += self._scgpt_kernel[tgt] * self.avg_target_delta
+                        pred = pred + self.gamma * prop_d + self.delta_w * prop_s
                     pred = pred.copy()
                     for tgt in idxs:
                         pred[tgt] = max(0.0, control_mean[tgt] + self.avg_target_delta)
