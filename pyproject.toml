@@ -1,0 +1,34 @@
+[project]
+name = "autoresearch-perturbation"
+version = "0.1.0"
+description = "Karpathy-style autoresearch loop for single-cell perturbation response prediction"
+requires-python = ">=3.10"
+dependencies = [
+    "anndata>=0.10",
+    "scanpy>=1.10",
+    "numpy>=1.24",
+    "scipy>=1.11",
+    "scikit-learn>=1.3",
+    "pandas>=2.0",
+]
+
+[project.optional-dependencies]
+# Real data loaders. pertpy pulls in a lot of deps — install only if you
+# want real data. The synthetic fallback works without this group.
+data = [
+    "pertpy>=0.8",
+]
+# Foundation model features. Install when the agent is ready to use
+# scGPT / Geneformer embeddings.
+fm = [
+    "torch>=2.1",
+    "transformers>=4.40",
+    "huggingface-hub>=0.20",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]
