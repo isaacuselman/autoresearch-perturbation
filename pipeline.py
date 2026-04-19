@@ -110,9 +110,10 @@ class Pipeline:
         if self.mean_delta is None:
             raise RuntimeError("Pipeline not fit.")
 
+        alpha = 3.0  # exp7: boost non-target delta magnitude
         out: dict[str, np.ndarray] = {}
         for p in test_perts:
-            pred = control_mean + self.mean_delta
+            pred = control_mean + alpha * self.mean_delta
             if self.avg_target_delta is not None:
                 tgt = _resolve_target_index(p, self.var_names, self.gene_names)
                 if tgt is not None:
