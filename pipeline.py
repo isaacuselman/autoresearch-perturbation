@@ -107,7 +107,21 @@ class Pipeline:
         if control_mask.sum() == 0:
             raise ValueError("No control cells in train split.")
 
-        control_mean = _to_dense_mean(train_adata[control_mask])
+        ctrl_x = train_adata[control_mask].X
+        ctrl_dense = (
+            np.asarray(ctrl_x.toarray()) if hasattr(ctrl_x, "toarray") else np.asarray(ctrl_x)
+        ).astype(np.float64)
+        control_mean = ctrl_dense.mean(axis=0)
+        # Pearson gene-gene correlation matrix from controls (used for propagation).
+        centered = ctrl_dense - control_mean
+        std = centered.std(axis=0)
+        std_safe = np.where(std < 1e-10, 1.0, std)
+        normed = centered / std_safe
+        n_ctrl = ctrl_dense.shape[0]
+        gene_corr = (normed.T @ normed) / max(1, n_ctrl - 1)
+        gene_corr = np.nan_to_num(gene_corr, nan=0.0)
+        np.fill_diagonal(gene_corr, 0.0)  # diag handled by override; no self-propagation
+        self._gene_corr = gene_corr
 
         train_perts = sorted(
             set(train_adata.obs["perturbation"].unique()) - {"control"}
@@ -155,26 +169,38 @@ class Pipeline:
         )
         self._control_mean = control_mean
 
-        # LOO-CV alpha sweep, with multi-target override.
-        candidate_alphas = [0.0, 1.0, 2.0, 3.0, 4.0, 5.0]
-        best_alpha, best_score = 1.0, -np.inf
+        # LOO-CV joint sweep over alpha (mean-delta scale) and beta (coexpression
+        # propagation strength).
+        candidate_alphas = [0.0, 1.0, 2.0, 3.0]
+        candidate_betas = [0.0, 0.25, 0.5, 1.0]
+        best_alpha, best_beta, best_score = 1.0, 0.0, -np.inf
         if deltas and self.avg_target_delta is not None:
             for alpha in candidate_alphas:
-                rs = []
-                for i in range(len(train_perts)):
-                    md_loo = _trim_mean_excl(deltas_arr, i, prop=0.1)
-                    pred_delta = alpha * md_loo
-                    if train_target_idxs[i]:
-                        pred_delta = pred_delta.copy()
-                        for tgt in train_target_idxs[i]:
-                            pred_post = max(0.0, control_mean[tgt] + self.avg_target_delta)
-                            pred_delta[tgt] = pred_post - control_mean[tgt]
-                    rs.append(_pearson_top_de(pred_delta, deltas_arr[i]))
-                mean_r = float(np.mean(rs)) if rs else -np.inf
-                if mean_r > best_score:
-                    best_score, best_alpha = mean_r, alpha
+                for beta in candidate_betas:
+                    rs = []
+                    for i in range(len(train_perts)):
+                        md_loo = _trim_mean_excl(deltas_arr, i, prop=0.1)
+                        pred_delta = alpha * md_loo
+                        if train_target_idxs[i]:
+                            propagated = np.zeros_like(pred_delta)
+                            for tgt in train_target_idxs[i]:
+                                propagated += self._gene_corr[tgt] * self.avg_target_delta
+                            pred_delta = pred_delta + beta * propagated
+                            pred_delta = pred_delta.copy()
+                            for tgt in train_target_idxs[i]:
+                                pred_post = max(0.0, control_mean[tgt] + self.avg_target_delta)
+                                pred_delta[tgt] = pred_post - control_mean[tgt]
+                        rs.append(_pearson_top_de(pred_delta, deltas_arr[i]))
+                    mean_r = float(np.mean(rs)) if rs else -np.inf
+                    if mean_r > best_score:
+                        best_score, best_alpha, best_beta = mean_r, alpha, beta
         self.alpha = best_alpha
-        print(f"loo_alpha: {self.alpha:.2f}  loo_pearson: {best_score:.4f}", flush=True)
+        self.beta = best_beta
+        print(
+            f"loo_alpha: {self.alpha:.2f}  loo_beta: {self.beta:.2f}  "
+            f"loo_pearson: {best_score:.4f}",
+            flush=True,
+        )
 
     def predict(
         self,
@@ -191,6 +217,11 @@ class Pipeline:
             if self.avg_target_delta is not None:
                 idxs = _resolve_target_indices(p, self._name_to_idx)
                 if idxs:
+                    if self.beta > 0:
+                        propagated = np.zeros_like(pred)
+                        for tgt in idxs:
+                            propagated += self._gene_corr[tgt] * self.avg_target_delta
+                        pred = pred + self.beta * propagated
                     pred = pred.copy()
                     for tgt in idxs:
                         pred[tgt] = max(0.0, control_mean[tgt] + self.avg_target_delta)
