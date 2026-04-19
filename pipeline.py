@@ -91,7 +91,9 @@ class Pipeline:
                 target_drops.append(float(mean_p[tgt] - control_mean[tgt]))
 
         self.mean_delta = (
-            np.mean(deltas, axis=0) if deltas else np.zeros_like(control_mean)
+            np.median(np.asarray(deltas), axis=0)
+            if deltas
+            else np.zeros_like(control_mean)
         )
         self.avg_target_delta = (
             float(np.mean(target_drops)) if target_drops else None
