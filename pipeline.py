@@ -97,7 +97,7 @@ class Pipeline:
             else np.zeros_like(control_mean)
         )
         self.avg_target_delta = (
-            float(np.mean(target_drops)) if target_drops else None
+            float(np.median(target_drops)) if target_drops else None
         )
         self._control_mean = control_mean
 
