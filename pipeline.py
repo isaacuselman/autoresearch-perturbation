@@ -60,7 +60,7 @@ def _to_dense_mean(adata_slice) -> np.ndarray:
 class Pipeline:
     def __init__(self):
         self.mean_delta: np.ndarray | None = None
-        self.target_post_value: float | None = None
+        self.avg_target_delta: float | None = None
         self.var_names: list[str] | None = None
         self.gene_names: list[str] | None = None
 
@@ -81,21 +81,22 @@ class Pipeline:
             self.gene_names = list(self.var_names)
 
         deltas = []
-        target_post_values = []
+        target_drops = []  # post[target] - control_mean[target] per train pert
         for p in train_perts:
             mask = train_adata.obs["perturbation"] == p
             mean_p = _to_dense_mean(train_adata[mask])
             deltas.append(mean_p - control_mean)
             tgt = _resolve_target_index(p, self.var_names, self.gene_names)
             if tgt is not None:
-                target_post_values.append(float(mean_p[tgt]))
+                target_drops.append(float(mean_p[tgt] - control_mean[tgt]))
 
         self.mean_delta = (
             np.mean(deltas, axis=0) if deltas else np.zeros_like(control_mean)
         )
-        self.target_post_value = (
-            float(np.mean(target_post_values)) if target_post_values else None
+        self.avg_target_delta = (
+            float(np.mean(target_drops)) if target_drops else None
         )
+        self._control_mean = control_mean
 
     def predict(
         self,
@@ -109,10 +110,10 @@ class Pipeline:
         out: dict[str, np.ndarray] = {}
         for p in test_perts:
             pred = control_mean + self.mean_delta
-            if self.target_post_value is not None:
+            if self.avg_target_delta is not None:
                 tgt = _resolve_target_index(p, self.var_names, self.gene_names)
                 if tgt is not None:
                     pred = pred.copy()
-                    pred[tgt] = self.target_post_value
+                    pred[tgt] = control_mean[tgt] + self.avg_target_delta
             out[p] = pred
         return out
