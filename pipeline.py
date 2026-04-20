@@ -20,16 +20,44 @@ from scipy import stats as _stats
 _SCGPT_EMB_PATH = (
     Path.home() / ".cache" / "autoresearch-perturbation" / "embeddings" / "scgpt_hvg_emb.npy"
 )
+_GENEFORMER_EMB_PATH = (
+    Path.home() / ".cache" / "autoresearch-perturbation" / "embeddings" / "geneformer_hvg_emb.npy"
+)
 
 
-def _load_scgpt_emb(n_genes: int) -> np.ndarray | None:
-    """Per-gene scGPT pretrained embedding (n_genes, d). None if cache missing."""
-    if not _SCGPT_EMB_PATH.exists():
+def _load_emb(path: Path, n_genes: int) -> np.ndarray | None:
+    if not path.exists():
         return None
-    emb = np.load(_SCGPT_EMB_PATH).astype(np.float32)
+    emb = np.load(path).astype(np.float32)
     if emb.shape[0] != n_genes:
         return None
     return emb
+
+
+def _load_scgpt_emb(n_genes: int) -> np.ndarray | None:
+    return _load_emb(_SCGPT_EMB_PATH, n_genes)
+
+
+def _load_geneformer_emb(n_genes: int) -> np.ndarray | None:
+    return _load_emb(_GENEFORMER_EMB_PATH, n_genes)
+
+
+def _build_combined_fm_emb(n_genes: int) -> np.ndarray | None:
+    """Per-gene foundation-model feature vector: concat(scGPT, Geneformer).
+    Each component is L2-normalized so that scaled cosine of the sub-vectors
+    is comparable. Genes missing from a model contribute zeros for that block.
+    """
+    parts = []
+    for loader in (_load_scgpt_emb, _load_geneformer_emb):
+        emb = loader(n_genes)
+        if emb is None:
+            continue
+        norms = np.linalg.norm(emb, axis=1, keepdims=True)
+        emb = emb / np.where(norms < 1e-10, 1.0, norms)
+        parts.append(emb)
+    if not parts:
+        return None
+    return np.concatenate(parts, axis=1).astype(np.float32)
 
 
 def _load_scgpt_kernel(n_genes: int) -> np.ndarray | None:
@@ -207,18 +235,23 @@ class Pipeline:
         )
         self._control_mean = control_mean
 
-        # scGPT pretrained gene-embedding cosine kernel + raw embeddings.
+        # Foundation-model gene embeddings: scGPT alone (for cosine kernel) +
+        # combined scGPT‖Geneformer for ridge features.
         scgpt_kernel = _load_scgpt_kernel(len(control_mean))
         scgpt_emb = _load_scgpt_emb(len(control_mean))
-        if scgpt_kernel is not None:
-            self._scgpt_kernel = scgpt_kernel
-            self._scgpt_emb = scgpt_emb
-            n_hits = int((np.linalg.norm(scgpt_kernel, axis=1) > 0).sum())
-            print(f"scgpt: loaded ({n_hits}/{len(control_mean)} genes covered)", flush=True)
+        fm_emb = _build_combined_fm_emb(len(control_mean))
+        self._scgpt_kernel = scgpt_kernel
+        self._scgpt_emb = scgpt_emb
+        self._fm_emb = fm_emb
+        if fm_emb is not None:
+            n_hits = int((np.linalg.norm(fm_emb, axis=1) > 0).sum())
+            print(
+                f"fm: combined embedding loaded "
+                f"shape={fm_emb.shape} ({n_hits}/{len(control_mean)} covered)",
+                flush=True,
+            )
         else:
-            self._scgpt_kernel = None
-            self._scgpt_emb = None
-            print("scgpt: no precomputed embeddings (skipping)", flush=True)
+            print("fm: no precomputed embeddings (skipping)", flush=True)
 
         # Conditional expectation kernel: beta_jg = cov(delta[:,g], delta[:,j])
         #                                          / var(delta[:,g])
@@ -242,31 +275,34 @@ class Pipeline:
             self._beta_kernel = np.zeros_like(self._gene_corr)
             self._delta_corr = np.zeros_like(self._gene_corr)
 
-        # scGPT-as-features ridge regression: per-output-gene linear model
-        # with target gene's scGPT embedding as input feature.
-        if self._scgpt_emb is not None:
+        # Foundation-model ridge regression: per-output-gene linear model with
+        # target gene's combined (scGPT + Geneformer) embedding as input feature.
+        if self._fm_emb is not None:
             X_rows = []
             d_rows = []
-            kept_idx = []  # train pert indices with at least 1 resolved + scGPT-known target
+            kept_idx = []
             for i, idxs in enumerate(train_target_idxs):
-                feats = [self._scgpt_emb[t] for t in idxs
-                         if np.linalg.norm(self._scgpt_emb[t]) > 0]
+                feats = [self._fm_emb[t] for t in idxs
+                         if np.linalg.norm(self._fm_emb[t]) > 0]
                 if not feats:
                     continue
                 X_rows.append(np.mean(feats, axis=0))
                 d_rows.append(deltas_arr[i])
                 kept_idx.append(i)
             if len(X_rows) >= 32:
-                X = np.stack(X_rows).astype(np.float64)  # (m, 512)
-                D = np.stack(d_rows).astype(np.float64)  # (m, n_genes)
-                # Ridge: B = (X^T X + λ I)^{-1} X^T D
+                X = np.stack(X_rows).astype(np.float64)
+                D = np.stack(d_rows).astype(np.float64)
                 lam = 0.001 * X.shape[0]
                 XtX = X.T @ X + lam * np.eye(X.shape[1])
                 self._scgpt_ridge_B = np.linalg.solve(XtX, X.T @ D).astype(np.float32)
-                print(f"scgpt-ridge: fit on {len(kept_idx)} perts, lambda={lam:.0f}", flush=True)
+                print(
+                    f"fm-ridge: fit on {len(kept_idx)} perts, "
+                    f"feat_dim={X.shape[1]}, lambda={lam:.2f}",
+                    flush=True,
+                )
             else:
                 self._scgpt_ridge_B = None
-                print(f"scgpt-ridge: insufficient training perts ({len(X_rows)})", flush=True)
+                print(f"fm-ridge: insufficient training perts ({len(X_rows)})", flush=True)
         else:
             self._scgpt_ridge_B = None
 
@@ -301,8 +337,8 @@ class Pipeline:
                                         prop_d += self._delta_corr[tgt] * self.avg_target_delta
                                         if self._scgpt_kernel is not None:
                                             prop_s += self._scgpt_kernel[tgt] * self.avg_target_delta
-                                        if self._scgpt_emb is not None and np.linalg.norm(self._scgpt_emb[tgt]) > 0:
-                                            feats.append(self._scgpt_emb[tgt])
+                                        if self._fm_emb is not None and np.linalg.norm(self._fm_emb[tgt]) > 0:
+                                            feats.append(self._fm_emb[tgt])
                                     if eta > 0 and feats and self._scgpt_ridge_B is not None:
                                         x_test = np.mean(feats, axis=0).astype(np.float32)
                                         prop_r = (x_test @ self._scgpt_ridge_B).astype(np.float64)
@@ -354,7 +390,7 @@ class Pipeline:
                             prop_d += self._delta_corr[tgt] * self.avg_target_delta
                             if self._scgpt_kernel is not None:
                                 prop_s += self._scgpt_kernel[tgt] * self.avg_target_delta
-                            if self._scgpt_emb is not None and np.linalg.norm(self._scgpt_emb[tgt]) > 0:
+                            if self._fm_emb is not None and np.linalg.norm(self._fm_emb[tgt]) > 0:
                                 feats.append(self._scgpt_emb[tgt])
                         if self.eta > 0 and feats and self._scgpt_ridge_B is not None:
                             x_test = np.mean(feats, axis=0).astype(np.float32)
