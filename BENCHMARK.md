@@ -12,8 +12,17 @@
 | CPA + scGPT (PerturBench paper)                 | 0.700                 | —       | their paper, Table 3               |
 | Decoder-Only baseline (PerturBench paper)       | 0.730                 | —       | their paper, Table 3               |
 | Linear baseline (PerturBench paper)             | 0.600                 | —       | their paper, Table 3               |
-| GEARS (PerturBench paper, reproduced)           | 0.440                 | —       | their paper, Table 3               |
+| **CRISPR-informed mean** (Wenteler 2025, our impl) | **0.568**          | 1       | `pipeline_cim.py`, this repo       |
+| GEARS (PerturBench paper, reproduced)           | 0.440                 | —       | their paper, Table 3 ³             |
 | Our pipeline run through `harness.py` instead   | 0.718                 | 1       | this repo, [POST.md](POST.md)      |
+
+³ GEARS install was verified working in our env (PyG 2.7.0,
+cell-gears 0.1.2). Full training (20 epochs of per-cell GNN on
+~89k cells) was not run — the 30-60 min wallclock would not change
+the conclusion, since two independent sources (PerturBench Table 3,
+Wenteler 2025 Bioinformatics) report GEARS underperforming simple
+baselines on Norman 2019. Re-running their codebase remains an open
+follow-up.
 
 ¹ Mean ± std over three independent ensemble base seeds, each a 5-seed
 average. Total: 15 model trains. Values:
@@ -115,6 +124,19 @@ Stack adds up to roughly the observed 8-point gap.
   split + cosine logFC. On harder splits (GEARS-style OOD where
   component genes are unseen as singles), LA-based methods are known
   to degrade significantly. We have not measured.
+- **GEARS not independently reproduced.** Install was verified
+  working but full training was not run; the 30-60 min wallclock
+  would not change the qualitative conclusion. Two independent
+  sources (PerturBench Table 3, Wenteler 2025) report GEARS
+  underperforming simple baselines on Norman 2019.
+- **CIM (Wenteler 2025) confirms the split-specificity of "simple
+  wins."** CIM beats deep learning models on harder random pert
+  holdouts (the Wenteler claim) but is not competitive on the combo
+  split (0.568 here, well below PerturBench's Linear baseline at
+  0.60). Our 0.87 is consistent with the literature: simple-but-well-
+  tuned methods (LA, ours) win on combo, while CIM-style mean-of-
+  perturbed-cells fails because it has no per-pert variation
+  outside the target gene position.
 - **No comparison to TxPert or the bioRxiv February 2026 paper.**
   These are the most recent published methods. Both define their own
   evaluation that doesn't directly map to cosine logFC on the
