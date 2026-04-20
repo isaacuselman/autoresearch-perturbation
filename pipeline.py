@@ -277,7 +277,7 @@ class Pipeline:
         candidate_alphas = [0.0, 1.0]
         candidate_gammas = [0.5, 1.0]
         candidate_deltas = [0.0, 0.5, 1.0]  # scGPT cosine-kernel weight
-        candidate_etas = [0.0, 0.5, 1.0]    # scGPT-ridge prediction weight
+        candidate_etas = [0.5, 1.0, 1.5, 2.0, 3.0]    # scGPT-ridge prediction weight
         best_alpha, best_gamma, best_delta_w, best_eta, best_score = (
             1.0, 1.0, 0.0, 0.0, -np.inf
         )
