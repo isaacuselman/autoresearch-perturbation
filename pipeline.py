@@ -260,7 +260,7 @@ class Pipeline:
                 X = np.stack(X_rows).astype(np.float64)  # (m, 512)
                 D = np.stack(d_rows).astype(np.float64)  # (m, n_genes)
                 # Ridge: B = (X^T X + λ I)^{-1} X^T D
-                lam = 0.1 * X.shape[0]
+                lam = 0.01 * X.shape[0]
                 XtX = X.T @ X + lam * np.eye(X.shape[1])
                 self._scgpt_ridge_B = np.linalg.solve(XtX, X.T @ D).astype(np.float32)
                 print(f"scgpt-ridge: fit on {len(kept_idx)} perts, lambda={lam:.0f}", flush=True)
