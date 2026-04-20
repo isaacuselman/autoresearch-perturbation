@@ -86,7 +86,10 @@ class _LatentAdditive(nn.Module):
 
     def forward(self, x_ctrl: torch.Tensor, p_onehot: torch.Tensor) -> torch.Tensor:
         z = self.f_ctrl(x_ctrl) + self.f_pert(p_onehot)
-        return self.f_dec(z)
+        # exp3: output-space residual. Decoder learns the perturbation
+        # DELTA off of the control baseline — smaller learning target,
+        # more stable for weak perturbations.
+        return x_ctrl + self.f_dec(z)
 
 
 def _to_dense_mean(adata_slice) -> np.ndarray:
