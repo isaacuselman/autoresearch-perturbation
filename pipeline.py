@@ -108,8 +108,8 @@ class Pipeline:
 
     def __init__(
         self,
-        latent_dim: int = 256,
-        hidden: int = 1024,
+        latent_dim: int = 128,
+        hidden: int = 512,
         dropout: float = 0.0,
         lr: float = 1e-3,
         epochs: int = 4000,
