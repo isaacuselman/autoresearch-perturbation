@@ -140,7 +140,11 @@ size contributes effectively nothing; the gap is training-side.
   training + our four extras) is still open — installed and verified
   working in a separate venv (`torch==2.5.1`) but infeasible to train
   on CPU (112M params × 62k cells × 500 epochs = hundreds of hours).
-  Their published number was trained on GPU.
+  Their published number was trained on GPU. See
+  [scripts/README.md](scripts/README.md) and
+  [scripts/run_on_gpu.sh](scripts/run_on_gpu.sh) for a ready-to-run
+  GPU reproduction (estimated $5-20 on RunPod / Lambda / Modal, ~1.5
+  hours wallclock on A100).
 - **One split, one metric.** The 0.87 result is specific to the combo
   split + cosine logFC. On harder splits (GEARS-style OOD where
   component genes are unseen as singles), LA-based methods are known

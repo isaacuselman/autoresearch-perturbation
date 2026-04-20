@@ -231,7 +231,11 @@ gap cleanly factors as ~0.00 from architecture size + ~0.08 from
 training-side improvements.
 
 Follow-up: full PerturBench codebase run (item #1) — closed as
-**infeasible on CPU**. Their codebase installs cleanly into a
+**infeasible on CPU**. Ready-to-run GPU script drafted at
+`scripts/run_on_gpu.sh` with README in `scripts/README.md`;
+estimated $5-20 on RunPod or similar, ~1.5 hours on A100. Deferred
+for now — the indirect evidence from item #2 is sufficient for the
+current claim. Their codebase installs cleanly into a
 separate venv (`/tmp/perturbench/.venv` with `torch==2.5.1`,
 scipy==1.12.0, Lightning, Hydra, etc.), data downloads work
 (`norman19_processed.h5ad` 91168×5575), and their `train` CLI
