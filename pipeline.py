@@ -111,6 +111,7 @@ class Pipeline:
         lr: float = 1e-3,
         epochs: int = 2000,
         seed: int = 0,
+        n_ensemble: int = 5,
         verbose: bool = True,
     ):
         self.latent_dim = latent_dim
@@ -119,8 +120,9 @@ class Pipeline:
         self.lr = lr
         self.epochs = epochs
         self.seed = seed
+        self.n_ensemble = n_ensemble
         self.verbose = verbose
-        self.model: Optional[_LatentAdditive] = None
+        self.models: list[_LatentAdditive] = []
         self._token_to_idx: dict[str, int] = {}
         self._control_mean: Optional[np.ndarray] = None
         self._device = torch.device("cpu")
@@ -134,10 +136,7 @@ class Pipeline:
         return vec
 
     def fit(self, train_adata) -> None:
-        torch.manual_seed(self.seed)
-        np.random.seed(self.seed)
-
-        # Build the pert-token vocabulary from training perts.
+        # Build the pert-token vocabulary from training perts (shared across ensemble).
         train_perts = sorted(
             set(train_adata.obs["perturbation"].unique()) - {"control"}
         )
@@ -154,7 +153,6 @@ class Pipeline:
         n_genes = control_mean.size
         self._control_mean = control_mean
 
-        # Per-pert training target: mean expression of cells with that pert.
         X_pert: list[np.ndarray] = []
         Y_target: list[np.ndarray] = []
         for p in train_perts:
@@ -172,32 +170,33 @@ class Pipeline:
         C = torch.tensor(control_mean, dtype=torch.float32, device=self._device)
         C_broadcast = C.unsqueeze(0).expand(X.shape[0], -1)
 
-        self.model = _LatentAdditive(
-            n_genes=n_genes,
-            n_pert_tokens=n_tokens,
-            latent_dim=self.latent_dim,
-            hidden=self.hidden,
-            dropout=self.dropout,
-        ).to(self._device)
-        opt = torch.optim.Adam(self.model.parameters(), lr=self.lr)
         loss_fn = nn.MSELoss()
-
-        self.model.train()
-        for epoch in range(self.epochs):
-            opt.zero_grad()
-            pred = self.model(C_broadcast, X)
-            loss = loss_fn(pred, Y)
-            loss.backward()
-            opt.step()
-            if self.verbose and (epoch + 1) % max(1, self.epochs // 10) == 0:
-                print(
-                    f"la_epoch: {epoch + 1}/{self.epochs}  loss: {loss.item():.5f}",
-                    flush=True,
-                )
+        self.models = []
+        for k in range(self.n_ensemble):
+            seed_k = self.seed + k
+            torch.manual_seed(seed_k)
+            np.random.seed(seed_k)
+            model = _LatentAdditive(
+                n_genes=n_genes,
+                n_pert_tokens=n_tokens,
+                latent_dim=self.latent_dim,
+                hidden=self.hidden,
+                dropout=self.dropout,
+            ).to(self._device)
+            opt = torch.optim.Adam(model.parameters(), lr=self.lr)
+            model.train()
+            for epoch in range(self.epochs):
+                opt.zero_grad()
+                pred = model(C_broadcast, X)
+                loss = loss_fn(pred, Y)
+                loss.backward()
+                opt.step()
+            self.models.append(model)
+            print(f"la_ens: model {k+1}/{self.n_ensemble} seed={seed_k} final_loss={loss.item():.5f}", flush=True)
 
         print(
-            f"la: trained on {X.shape[0]} perts, {n_tokens} pert-tokens, "
-            f"{n_genes} genes, latent={self.latent_dim}",
+            f"la: trained {self.n_ensemble}-way ensemble on {X.shape[0]} perts, "
+            f"{n_tokens} pert-tokens, {n_genes} genes, latent={self.latent_dim}",
             flush=True,
         )
 
@@ -207,9 +206,10 @@ class Pipeline:
         control_mean: np.ndarray,
         train_adata,
     ) -> dict[str, np.ndarray]:
-        if self.model is None:
+        if not self.models:
             raise RuntimeError("Pipeline not fit.")
-        self.model.eval()
+        for m in self.models:
+            m.eval()
         C = torch.tensor(control_mean, dtype=torch.float32, device=self._device)
         out: dict[str, np.ndarray] = {}
         with torch.no_grad():
@@ -217,6 +217,10 @@ class Pipeline:
                 onehot = torch.tensor(
                     self._pert_to_multihot(p), dtype=torch.float32, device=self._device
                 )
-                pred = self.model(C.unsqueeze(0), onehot.unsqueeze(0)).squeeze(0)
+                preds = [
+                    m(C.unsqueeze(0), onehot.unsqueeze(0)).squeeze(0)
+                    for m in self.models
+                ]
+                pred = torch.stack(preds).mean(dim=0)
                 out[p] = pred.cpu().numpy()
         return out
