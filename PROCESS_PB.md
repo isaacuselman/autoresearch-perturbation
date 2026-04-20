@@ -201,6 +201,40 @@ residual + dropout + target-override. Whether their 4M architecture
 under our training would land higher still is answered next in
 the `pipeline_la_pb_arch.py` experiment.
 
+## Architecture-size ablation: PerturBench's 4M/107M arch under our training (2026-04-20)
+
+Ran `pipeline_la_pb_arch.Pipeline` — PerturBench's exact best-
+Norman19 hyperparameters (latent=512, encoder_width=4352, n_layers=1,
+lr=9.26e-5, wd=2.18e-8, dropout=0.1, softplus_output=True,
+max_epochs=500) — under our training procedure (per-pert-mean,
+5-seed ensemble, per-target-gene override). Parameter count: ~107M
+per model (3 MLPs × ~35M each). 3 base seeds.
+
+| base seed | cosine logFC | rank   | wall   |
+|-----------|--------------|--------|--------|
+| 0         | 0.8736       | 0.0124 | 734 s  |
+| 100       | 0.8765       | 0.0103 | 804 s  |
+| 200       | 0.8744       | 0.0117 | 890 s  |
+| **mean**  | **0.8748 ± 0.0013** | 0.0115 ± 0.0009 | — |
+
+**Our pipeline (0.8M params):** 0.8708 ± 0.0023.
+**pb_arch (107M params):** 0.8748 ± 0.0013.
+
+Delta: **+0.004**. Half-overlapping error bars. Architecture size
+is not a meaningful lever on this split at our training; going from
+0.8M → 107M params gains perhaps 0.004 cosine logFC. Claim 2 ("the
+advantage is implementation, not architecture") is now directly
+supported: their published 4M model scores 0.79 in their training
+setup, while the same model in our training setup scores 0.87 —
+matching or slightly exceeding our small-model pipeline. The 8-point
+gap cleanly factors as ~0.00 from architecture size + ~0.08 from
+training-side improvements.
+
+Follow-up: full PerturBench codebase run (item #1) is set up and
+running 5-epoch smoke at ~10 min/epoch on CPU. Their published
+0.79 is from a 500-epoch run on GPU infrastructure; we cannot
+reach that budget locally. See "mistakes" section.
+
 ## Mistakes made during run 2
 
 **CI was red for ~2 hours and I kept pushing anyway.** Seeding

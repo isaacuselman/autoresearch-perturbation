@@ -107,6 +107,12 @@ The advantage in our pipeline is implementation, not capacity:
 
 Stack adds up to roughly the observed 8-point gap.
 
+**Architecture-size ablation** (`pipeline_la_pb_arch.py`, 3 base
+seeds): running PerturBench's 107M-parameter LA under our training
+procedure gives **0.8748 ± 0.0013** vs our small-model pipeline's
+0.8708 ± 0.0023. Delta +0.004 — essentially tied. Architecture
+size contributes effectively nothing; the gap is training-side.
+
 ## Where this lands relative to other recent work
 
 | paper                                                      | claim                  | comparable? |

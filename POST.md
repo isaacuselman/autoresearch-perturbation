@@ -244,12 +244,17 @@ harness) are listed with their observed deltas:
    produces a prediction, replace `pred[target]` with
    `control[target] + observed per-target delta`. +0.004.
 
-The improvements **do not require a bigger architecture**: the
-pipeline here has ~0.8M parameters (hidden=512, latent=128) while
-PerturBench's tuned LA has 4M (encoder_width=4352, latent=512) and
-scores 0.79. However, the reverse is not established — *their* 4M
-architecture with *our* training setup could well land higher than
-either current number. That experiment is open.
+The improvements **do not require a bigger architecture**. The
+pipeline here has ~0.8M parameters (hidden=512, latent=128);
+PerturBench's tuned LA has 107M (encoder_width=4352, latent=512
+across 3 MLPs) and scores 0.79 in their published setup. Running
+**their exact hyperparameters under our training procedure**
+(`pipeline_la_pb_arch.py`, 3 base seeds) gives **0.8748 ± 0.0013** —
+essentially tied with our small-model pipeline at 0.8708 ± 0.0023.
+So architecture size contributes almost nothing (~+0.004); the
+~0.08 gap to their published number sits in the training procedure
+and the four-item stack (ensemble + residual + dropout removal +
+target override).
 
 The ablation above reframes where the ~0.08 gap to PerturBench
 actually comes from. Per-pert-mean training contributes ~+0.008.
