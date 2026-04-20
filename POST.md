@@ -171,20 +171,47 @@ PerturBench (NeurIPS 2024,
 published perturbation-prediction methods on Norman 2019. Their best
 result is a simple MLP autoencoder ("Latent Additive") at 0.79 *cosine
 logFC* on a different split (combo prediction: train on all single
-perts + 30% of duals, test on remaining duals). The 0.72 reported here
-uses *Pearson on top-200 differentially expressed genes* on a random
-20% pert holdout. **Different metric, different split — not directly
-comparable.** A follow-up project, mentioned at the end, ports the
-PerturBench evaluation into this harness for an honest head-to-head.
+perts + 30% of duals, test on remaining duals).
 
-The qualitative findings line up well with the PerturBench paper:
+Rather than leave that comparison at "different metric, different
+split," this project ports the PerturBench evaluation into a parallel
+harness (`harness_perturbench.py`) and re-implements Latent Additive
+(`pipeline_la.py`) to produce a real 2×2 head-to-head.
+
+The numbers:
+
+|                         | random 20% pert holdout<br/>Pearson top-200 DE | combo split<br/>cosine logFC |
+|-------------------------|:----:|:----:|
+| ridge + scGPT/Geneformer (this work's pipeline) | **0.718** | 0.750 |
+| Latent Additive (reproduction)                   | 0.699 | **0.825 ± 0.006**¹ |
+| Latent Additive (PerturBench paper)              | —     | 0.79  ± 0.01 |
+
+¹ Mean ± std over four random seeds.
+
+Two observations stand out:
+
+- **Each method wins on the split it was designed for.** LA's additive
+  latent makes combo prediction almost free: every target gene has been
+  seen as a single, and a dual pert is just the sum of two latent
+  shifts. The ridge + foundation-model pipeline generalizes better to
+  the random holdout, where some test perts have target genes never
+  seen as singles — a case where LA's `z_pert` for that gene is zero.
+- **The reproduction of LA lands ~3 points above the published number.**
+  The one departure from the paper: this implementation trains on
+  per-pert *mean* expression rather than per-cell examples. Directly
+  optimizing the quantity the scorer measures gives a cleaner gradient
+  signal from the ~150 training perts and appears to matter more than
+  architectural tweaks.
+
+The qualitative findings otherwise line up with PerturBench:
 
 - **Simple methods are surprisingly hard to beat on this kind of task.**
-  PerturBench's MLP baseline beats everything else they tested,
+  PerturBench's MLP baseline beats every other method they tested,
   including scGPT-augmented variants and a published GNN method
-  (GEARS). The story here matched: gains came from getting the
-  structure right (target-gene override, multi-target labels,
-  delta-space coexpression), not from increasingly clever models.
+  (GEARS at 0.44 cosine logFC). The story here matched: gains came
+  from getting the structure right (target-gene override, multi-target
+  labels, delta-space coexpression), not from increasingly clever
+  models.
 - **Foundation models help when used as features, not as similarity
   metrics.** PerturBench shows scGPT *augmentation* of CPA and Latent
   Additive moves scores by a few percent — the same ballpark as the
