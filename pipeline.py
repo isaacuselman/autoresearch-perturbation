@@ -112,7 +112,7 @@ class Pipeline:
         hidden: int = 512,
         dropout: float = 0.0,
         lr: float = 1e-3,
-        epochs: int = 2000,
+        epochs: int = 4000,
         seed: int = 0,
         n_ensemble: int = 5,
         verbose: bool = True,
