@@ -179,9 +179,9 @@ Wallclock 1176s, near the 1200s cap.
 
 ## Where this lands now
 
-Best: **0.869 cosine logFC** (single-run, exp 10). Multi-seed error
-bars in progress via `eval_multiseed_pb.py` to verify robustness
-across base seeds.
+Best: **0.871 ± 0.002 cosine logFC** across 3 independent ensemble
+base seeds (15 model trains total). Range [0.8685, 0.8738]. Tight
+std confirms the result is robust, not lucky.
 
 PerturBench Table 3 published numbers on the same split:
 - Latent Additive: 0.79 ± 0.01
