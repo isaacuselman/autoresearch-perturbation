@@ -204,35 +204,49 @@ Eleven experiments in, the final pipeline hits
 **0.871 ± 0.002 cosine logFC** across 3 independent ensemble base
 seeds, commit `best/apr19/exp10` (or thereabouts — see
 [PROCESS_PB.md](PROCESS_PB.md) for the commit-by-commit log). That
-is **eight points above PerturBench's published LA baseline** and
-above every method in their Table 3.
+**exceeds PerturBench's reported LA number of 0.79 ± 0.01 on the
+same split and metric** — with the honest caveat that this is our
+implementation vs their published number, not our changes applied
+to their codebase. A direct A/B on their code is ongoing; until
+that lands, treat "8-point gap" as an upper bound on what's
+purely due to training-procedure differences.
 
 ### What moved the score
 
-The advantage traces to five implementation choices stacked on top
-of a plain Latent Additive backbone:
+Five implementation choices stacked on top of a plain Latent Additive
+backbone. The loop-internal ablations (each measured in this
+harness) are listed with their observed deltas:
 
 1. **Per-pert-mean training** (same as run 1). PerturBench trains
    on per-cell examples; this implementation trains on per-pert
    mean expression vectors directly. Cleaner gradient toward the
-   quantity being scored. Estimated ~+0.03.
+   quantity being scored. **Likely the biggest contributor,
+   estimated 2-4 points based on comparing our LA reproduction
+   against PerturBench's published number** — but note that
+   comparison has multiple confounds (architecture size, seeds,
+   LR schedule). A clean ablation holding everything else constant
+   is open work.
 2. **5-seed ensemble.** Standard bagging over random initialization.
    Plateaus at 5 (10 seeds ties). +0.013.
 3. **Output-space residual.** `pred = control_mean + f_dec(z)`
    instead of `pred = softplus(f_dec(z))`. Decoder learns the delta,
    a smaller target. +0.003.
-4. **Dropout removed.** The biggest single keep in run 2 (+0.013).
+4. **Dropout removed.** The biggest single keep *in run 2* (+0.013).
    With ensembling and per-pert-mean training already reducing
    variance, dropout added inference-time blur without regularization
-   payoff.
+   payoff. This finding is specific to the training procedure here —
+   per-cell training in PerturBench's setup may still benefit from
+   dropout.
 5. **Explicit per-target-gene override.** After the ensemble
    produces a prediction, replace `pred[target]` with
    `control[target] + observed per-target delta`. +0.004.
 
-It's not architecture; PerturBench's tuned LA has 4M parameters
-(encoder_width=4352, latent=512), while the pipeline here has
-~0.8M (hidden=512, latent=128). The difference is where the
-supervision signal goes and how it's averaged.
+The improvements **do not require a bigger architecture**: the
+pipeline here has ~0.8M parameters (hidden=512, latent=128) while
+PerturBench's tuned LA has 4M (encoder_width=4352, latent=512) and
+scores 0.79. However, the reverse is not established — *their* 4M
+architecture with *our* training setup could well land higher than
+either current number. That experiment is open.
 
 ### About the "simple controls beat deep learning" claim
 
@@ -245,17 +259,19 @@ cells, with a 2× bump at the target gene for CRISPRa.
 Reproducing CIM in this harness gives **0.568 cosine logFC on the
 combo split** — well below PerturBench's Linear baseline (0.60) and
 far below LA (0.79) or the pipeline here (0.87). CIM's rank metric
-of 0.45 is essentially random, confirming mode collapse: its only
-per-pert variation is a single-gene tweak.
+comes out at 0.45 (random would be 0.50), so predictions *are*
+slightly specific to each test pert via the target-gene tweak, but
+only weakly — close to mode-collapse without quite reaching it.
 
-The resolution is that CIM wins on a *different* split. On random
+One plausible reading: CIM wins on a *different* split. On random
 pert holdout where some target genes go entirely unseen at training
 time, LA's `z_pert` for that target is zero and CIM's fallback to
 the global mean is hard to beat. On combo split where every gene
 is in training as a single, LA's compositional latent wins and
-CIM's mean-of-perturbed-cells doesn't vary across test perts. The
-"simple vs deep" debate has been conflating two different
-generalization regimes.
+CIM has almost no per-pert variation to work with. **This is a
+hypothesis worth testing separately — the "simple vs deep" claims
+in the literature may be split-specific — but a single
+cross-harness data point isn't enough to settle it.**
 
 ### The table
 

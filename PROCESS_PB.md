@@ -166,6 +166,32 @@ Wallclock 1176s, near the 1200s cap.
   but real lift on top of LA (+0.004). Useful pattern beyond a
   single pipeline architecture.
 
+## Mistakes made during run 2
+
+**CI was red for ~2 hours and I kept pushing anyway.** Seeding
+`pipeline.py` with the LA implementation introduced `import torch`.
+`torch` lives in the `fm` optional dependency group in
+`pyproject.toml`, not the base deps that the smoketest workflow
+installs. So from commit `965f0e9` (pb-apr20 seed) through `98bd625`
+(POST.md update) — 9 commits, nine CI failures — every run blew up
+at `ModuleNotFoundError: No module named 'torch'` before even
+getting to the harness. I was pushing commits without waiting for
+the green check and only noticed when an off-hand "check CI" showed
+the red. Fixed in `b50033f` by adding `--extra fm` to the
+`uv sync` step on this branch.
+
+The irony: run 1's writeup calls out the kernel-mismatch bug as
+"exactly the failure mode the autoresearch pattern is supposed to
+guard against — a single scalar cannot tell whether the system is
+getting better or merely drifting inconsistently." Here, the
+scalar being ignored was the CI check. Same class of mistake in a
+different layer.
+
+Lesson: after every push, wait for the green before the next
+commit. For `autoresearch/pb-apr20` specifically, the
+`.github/workflows/smoketest.yml` was patched to install `fm`
+extras because the pipeline on this branch genuinely needs torch.
+
 ## Open leads from `program.md` not yet tried in this run
 
 - Smaller weight-decay coefficients (1e-5, 1e-6) — selective on

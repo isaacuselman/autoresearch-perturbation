@@ -147,11 +147,20 @@ Stack adds up to roughly the observed 8-point gap.
 > "On the PerturBench Norman 2019 combo-prediction split using cosine
 > logFC, our pipeline achieves 0.871 ± 0.002 across 3 base seeds,
 > exceeding the PerturBench paper's reported Latent Additive baseline
-> of 0.79 ± 0.01 by a non-overlapping margin. The advantage is
-> traceable to implementation choices — per-pert-mean training,
-> output-space residual, modest ensembling, dropout removal, and
-> explicit per-target-gene override — rather than to architecture
-> size. We have not independently re-run the PerturBench codebase, nor
-> have we benchmarked on the harder GEARS/TxPert OOD splits."
+> of 0.79 ± 0.01 on the same evaluation. This compares our
+> implementation to their published number; we have not independently
+> re-run their codebase, so the gap includes any difference between
+> their codebase as-reported and a fair implementation-matched
+> baseline. Improvements in our pipeline (per-pert-mean training,
+> output-space residual, modest ensembling, dropout removal, explicit
+> per-target-gene override) do not require a larger architecture —
+> our 0.8M-parameter model beats their 4M-parameter published model —
+> but we have not tested their 4M architecture under our training
+> procedure, so we cannot rule out that it would land higher still.
+> We have also not benchmarked on harder GEARS/TxPert OOD splits."
 
-This is the strongest claim the current evidence supports.
+This is the most claim the current evidence directly supports.
+Sharper claims (that the ~8-point gap is purely training-procedure;
+that architecture size is orthogonal; that per-pert-mean is worth
+specifically ~+0.03) require follow-up experiments outlined in the
+companion PR description.
