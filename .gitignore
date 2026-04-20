@@ -2,7 +2,6 @@ __pycache__/
 *.pyc
 .venv/
 .uv/
-uv.lock
 results.tsv
 run.log
 NOTES_FOR_HUMAN.md
