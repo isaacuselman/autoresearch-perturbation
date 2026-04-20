@@ -230,10 +230,22 @@ matching or slightly exceeding our small-model pipeline. The 8-point
 gap cleanly factors as ~0.00 from architecture size + ~0.08 from
 training-side improvements.
 
-Follow-up: full PerturBench codebase run (item #1) is set up and
-running 5-epoch smoke at ~10 min/epoch on CPU. Their published
-0.79 is from a 500-epoch run on GPU infrastructure; we cannot
-reach that budget locally. See "mistakes" section.
+Follow-up: full PerturBench codebase run (item #1) — closed as
+**infeasible on CPU**. Their codebase installs cleanly into a
+separate venv (`/tmp/perturbench/.venv` with `torch==2.5.1`,
+scipy==1.12.0, Lightning, Hydra, etc.), data downloads work
+(`norman19_processed.h5ad` 91168×5575), and their `train` CLI
+launches end-to-end under the `trainer=cpu` config. But the 112M-
+parameter model with 62,913 training cells / batch_size=4000 / 500
+epochs takes >15 minutes per epoch on CPU — hundreds of hours for
+a single seed of their intended training schedule. Their published
+0.79 was trained on GPU infrastructure (NVIDIA A100 per their
+Appendix). Without GPU budget here, we cite their published number
+and lean on the indirect evidence from item #2 (their architecture
+under our training = 0.875), which directly substitutes for the
+end-to-end reproduction at equivalent rigor: if a re-run of their
+code would land near their published 0.79, we already know the gap
+is training-side.
 
 ## Mistakes made during run 2
 

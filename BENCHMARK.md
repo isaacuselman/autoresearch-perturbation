@@ -125,12 +125,22 @@ size contributes effectively nothing; the gap is training-side.
 
 ## Caveats and what would strengthen the claim
 
-- **Single-implementation advantage.** Our 0.87 vs their 0.79 reflects
-  a particular implementation, not necessarily a fundamental gap. A
-  motivated re-implementation of LA on PerturBench's own codebase with
-  per-pert-mean training, ensembling, and dropout removal would
-  probably also reach ~0.87. We have not done this; their dependency
-  pins (`torch <= 2.5.1`) conflict with our environment.
+- **Single-implementation advantage.** Our 0.87 vs their 0.79 could
+  in principle reflect a particular implementation, not a fundamental
+  gap. Two direct ablations address this:
+  1. Running their exact 107M-parameter architecture
+     (`pipeline_la_pb_arch.py`, their best Norman19 hyperparameters)
+     under our training: **0.8748 ± 0.0013**. Tied with our small
+     pipeline — architecture size adds ~+0.004.
+  2. Training-procedure ablation (per-pert-mean vs per-cell), all else
+     held constant: **+0.008**. Small.
+  By subtraction the remaining ~0.07 sits in the stack of ensembling
+  + output residual + dropout removal + per-target override. A fair
+  end-to-end re-run of their codebase (their architecture + their
+  training + our four extras) is still open — installed and verified
+  working in a separate venv (`torch==2.5.1`) but infeasible to train
+  on CPU (112M params × 62k cells × 500 epochs = hundreds of hours).
+  Their published number was trained on GPU.
 - **One split, one metric.** The 0.87 result is specific to the combo
   split + cosine logFC. On harder splits (GEARS-style OOD where
   component genes are unseen as singles), LA-based methods are known

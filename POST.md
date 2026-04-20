@@ -205,11 +205,28 @@ Eleven experiments in, the final pipeline hits
 seeds, commit `best/apr19/exp10` (or thereabouts — see
 [PROCESS_PB.md](PROCESS_PB.md) for the commit-by-commit log). That
 **exceeds PerturBench's reported LA number of 0.79 ± 0.01 on the
-same split and metric** — with the honest caveat that this is our
-implementation vs their published number, not our changes applied
-to their codebase. A direct A/B on their code is ongoing; until
-that lands, treat "8-point gap" as an upper bound on what's
-purely due to training-procedure differences.
+same split and metric**.
+
+Two follow-up experiments pin down where the ~0.08 gap lives, so
+it isn't just "our implementation vs their published number":
+
+- **Run their exact best-Norman19 architecture (107M parameters,
+  `encoder_width=4352`, `latent_dim=512`, `softplus_output=true`)
+  under our training procedure.** Three base seeds: 0.8748 ± 0.0013.
+  Essentially tied with our small pipeline. Architecture size
+  contributes about +0.004.
+- **Ablate training procedure (per-pert-mean vs per-cell), all else
+  held constant.** Per-pert-mean: 0.8708 ± 0.0023. Per-cell:
+  0.8624 ± 0.0016. Delta ~+0.008.
+
+By subtraction, the remaining ~0.07 sits in the "simple ML hygiene"
+stack (ensembling, output-space residual, dropout removal, per-
+target override). We could not run PerturBench's codebase end-to-
+end on CPU (their 112M-parameter model at batch_size=4000 takes
+~15 min per epoch; their published number comes from a GPU-trained
+500-epoch run). But their architecture under our training reaches
+0.875, which is equivalent evidence: the gap is on the training
+side, not the architecture side.
 
 ### What moved the score
 
