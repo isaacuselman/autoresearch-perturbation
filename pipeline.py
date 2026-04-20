@@ -110,7 +110,7 @@ class Pipeline:
         self,
         latent_dim: int = 128,
         hidden: int = 512,
-        dropout: float = 0.1,
+        dropout: float = 0.0,
         lr: float = 1e-3,
         epochs: int = 2000,
         seed: int = 0,
