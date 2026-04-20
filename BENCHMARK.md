@@ -80,8 +80,13 @@ The advantage in our pipeline is implementation, not capacity:
 
 1. **Per-pert-mean training.** PerturBench trains on per-cell
    examples; we average per-pert and train on the means. Cleaner
-   gradient on the quantity the scorer measures. Estimated lift
-   ~3 points (consistent with the head-to-head in [POST.md](POST.md)).
+   gradient on the quantity the scorer measures. **Ablation**
+   (architecture + ensemble + residual + dropout + override held
+   constant, 3 base seeds each): per_pert_mean 0.8708 ± 0.0023 vs
+   per_cell 0.8624 ± 0.0016 → delta **+0.008**. Worth roughly one
+   point, not three. Caveat: per-cell was compute-matched on
+   gradient updates (4000) rather than PerturBench's much larger
+   ~160k-step schedule; a fully-converged per-cell run is open.
 2. **5-seed ensemble (mean of predictions).** PerturBench reports
    single-seed numbers in Table 3. ~+0.013 in our experiments.
 3. **Output-space residual.** `pred = control_mean + f_dec(z)`

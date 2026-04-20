@@ -220,12 +220,15 @@ harness) are listed with their observed deltas:
 1. **Per-pert-mean training** (same as run 1). PerturBench trains
    on per-cell examples; this implementation trains on per-pert
    mean expression vectors directly. Cleaner gradient toward the
-   quantity being scored. **Likely the biggest contributor,
-   estimated 2-4 points based on comparing our LA reproduction
-   against PerturBench's published number** — but note that
-   comparison has multiple confounds (architecture size, seeds,
-   LR schedule). A clean ablation holding everything else constant
-   is open work.
+   quantity being scored. **Ablation** (`ablation_training.py`,
+   same architecture + ensemble + residual + dropout + target
+   override held constant, per-pert-mean vs per-cell, 3 base
+   seeds each): per-pert-mean **0.8708 ± 0.0023**, per-cell
+   **0.8624 ± 0.0016**, delta **+0.008**. So this is worth only
+   about a point — much less than our initial guess. Caveat:
+   per-cell was budget-matched on gradient updates, not on
+   PerturBench's ~160k-step training schedule; a fully-converged
+   per-cell run is open work.
 2. **5-seed ensemble.** Standard bagging over random initialization.
    Plateaus at 5 (10 seeds ties). +0.013.
 3. **Output-space residual.** `pred = control_mean + f_dec(z)`
@@ -247,6 +250,17 @@ PerturBench's tuned LA has 4M (encoder_width=4352, latent=512) and
 scores 0.79. However, the reverse is not established — *their* 4M
 architecture with *our* training setup could well land higher than
 either current number. That experiment is open.
+
+The ablation above reframes where the ~0.08 gap to PerturBench
+actually comes from. Per-pert-mean training contributes ~+0.008.
+By elimination, the remaining ~0.07 sits in the other four items
+together — modest ensembling, output-space residual, dropout=0,
+and per-target-gene override. Taken individually each is mundane
+"ML hygiene," but in combination they compound to more than the
+single biggest architectural choice. The "boring wins" pattern
+from PerturBench's paper is reinforced here: no bright-line
+architectural improvement, just stacked small training-side
+decisions.
 
 ### About the "simple controls beat deep learning" claim
 

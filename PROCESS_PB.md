@@ -166,6 +166,41 @@ Wallclock 1176s, near the 1200s cap.
   but real lift on top of LA (+0.004). Useful pattern beyond a
   single pipeline architecture.
 
+## Ablation: per-pert-mean vs per-cell training (2026-04-20)
+
+Ran `pipeline_la_ablation.Pipeline` in both training modes with
+architecture, ensemble (n=5), output-space residual, dropout=0,
+per-target-gene override, and gradient-step count (4000) all held
+constant. 3 base seeds per mode, 15 model trains per mode.
+
+| mode            | cosine logFC        | rank               | wallclock     |
+|-----------------|---------------------|--------------------|---------------|
+| per_pert_mean   | **0.8708 ± 0.0023** | 0.0113 ± 0.0008    | ~290 s/seed   |
+| per_cell        | 0.8624 ± 0.0016     | 0.0139 ± 0.0006    | ~370 s/seed   |
+| **delta**       | **+0.0083**         | −0.003             | —             |
+
+**Finding:** per-pert-mean training is worth about **1 point** on
+the combo split, not 2-4 points as previously estimated. Per-cell
+training with the rest of our improvements still hits 0.862 —
+already 7 points above PerturBench's published LA at 0.79. The
+majority of our advantage over the paper's baseline does not come
+from the training-procedure choice.
+
+**Caveat on compute:** both modes were given 4000 gradient updates
+to match. PerturBench trains per-cell for ~160k grad steps (500
+epochs × 320 batches on 80k cells). Per-cell in this ablation is
+therefore undertrained relative to how per-cell is typically run;
+a fully-converged per-cell comparison is open work.
+
+**Implication for claims 2 and 3:** claim 3 (per-pert-mean worth
+~+0.03) is weaker than stated — adjusted to ~+0.01. Claim 2 (the
+advantage is implementation-side, not architectural) is supported
+by this specifically — the training procedure itself is only a
+small piece, so most of the lift must come from ensemble +
+residual + dropout + target-override. Whether their 4M architecture
+under our training would land higher still is answered next in
+the `pipeline_la_pb_arch.py` experiment.
+
 ## Mistakes made during run 2
 
 **CI was red for ~2 hours and I kept pushing anyway.** Seeding
