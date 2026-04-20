@@ -391,7 +391,7 @@ class Pipeline:
                             if self._scgpt_kernel is not None:
                                 prop_s += self._scgpt_kernel[tgt] * self.avg_target_delta
                             if self._fm_emb is not None and np.linalg.norm(self._fm_emb[tgt]) > 0:
-                                feats.append(self._scgpt_emb[tgt])
+                                feats.append(self._fm_emb[tgt])
                         if self.eta > 0 and feats and self._scgpt_ridge_B is not None:
                             x_test = np.mean(feats, axis=0).astype(np.float32)
                             prop_r = (x_test @ self._scgpt_ridge_B).astype(np.float64)
