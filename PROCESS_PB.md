@@ -50,8 +50,13 @@ per-cell examples.
 | 4   | `03be0bc` | 0.8410 | 0.0317 | discard | 524 s | scale capacity (latent 256, hidden 1024)             |
 | 5   | `5cbd5d8` | 0.8505 | 0.0252 | discard | 630 s | 10-seed ensemble (tied exp 3, slower)                |
 | 6   | `088dcca` | 0.8461 | 0.0362 | discard | 334 s | Adam `weight_decay=1e-4` (over-regularized)          |
+| 7   | `6a18df0` | 0.5608 | 0.4981 | discard | 290 s | selective `wd=1e-4` on `f_pert` only — **mode collapse** |
+| 8   | `3f89202` | 0.8550 | 0.0211 | keep    | 194 s | explicit per-target-gene override on LA output      |
+| 9   | `6c3d154` | 0.8682 | 0.0139 | keep    | 223 s | dropout 0.1 → 0.0 — biggest jump in run 2          |
+| 10  | `6af2608` | 0.8685 | 0.0123 | keep    | 430 s | epochs 2000 → 4000 (marginal but strictly better)  |
+| 11  | `f410692` | 0.8630 | 0.0152 | discard | 1176 s | retry capacity (latent=256, hidden=1024) without dropout — still overfits |
 
-**Current best:** exp 3 at 0.851 cosine logFC, commit `e624ece`.
+**Current best:** exp 10 at 0.869 cosine logFC, commit `6af2608`.
 
 ## Per-experiment rationale
 
@@ -85,9 +90,48 @@ this model size.
 
 **Exp 6 — global weight decay.** L2 regularization on all parameters.
 Program.md mentions L2 on `z_pert` specifically; this experiment
-applied it globally with `weight_decay=1e-4`. Too aggressive. A
-follow-up with per-parameter-group weight decay (only on `f_pert`) is
-still on the list.
+applied it globally with `weight_decay=1e-4`. Too aggressive.
+
+**Exp 7 — selective L2 on `f_pert` only.** Program.md's actual
+prescription. Used parameter groups so `weight_decay=1e-4` applied
+only to the perturbation encoder. Result: catastrophic mode collapse
+(score 0.56, rank 0.50 ≈ random). The encoder's outputs got crushed
+toward zero; the model produced a near-identical prediction for every
+test pert. The cosine_logFC_rank metric flagged this immediately,
+exactly the failure mode `program.md` warned about. Smaller
+coefficients (1e-5, 1e-6) are still on the list but lower priority
+after this signal.
+
+**Exp 8 — explicit per-target-gene override.** Direct port of run 1's
+target-override idea, layered on top of LA's prediction. After the
+ensemble produces `pred`, replace `pred[target_hvg]` with
+`control[target_hvg] + per_gene_delta[target]`, where
+`per_gene_delta` is the median observed delta across training perts
+that targeted that gene. 62 of the test target genes fell inside the
+HVG-5000 set. +0.004; rank also improved to 0.021. The signal is
+small because LA is already close to the right value at the target
+position, but the override sharpens it.
+
+**Exp 9 — drop dropout (0.1 → 0.0).** Program.md does not list this
+explicitly; it came from the prior on this run that ensembling +
+per-pert-mean training is already variance-reducing, so dropout was
+adding stochastic noise without regularization payoff. Result: +0.013,
+the biggest single jump in run 2. Confirmed both metrics improved
+(cosine 0.855 → 0.868, rank 0.021 → 0.014).
+
+**Exp 10 — epochs 2000 → 4000.** With dropout=0 the loss surface
+became more deterministic, so longer training had a chance of
+converging more cleanly. Marginal (+0.0003) but strictly better
+under the ratchet rule, and the rank dropped further (0.014 → 0.012).
+Wallclock doubled to 430s.
+
+**Exp 11 — retry capacity scaling without dropout.** Hypothesis: exp 4
+overfit because dropout was already eating the regularization
+budget; without dropout, latent=256/hidden=1024 might breathe.
+Result: same overfit pattern (final loss → 0 = full memorization),
+test score 0.863, slightly worse than 0.869. Confirmed for the second
+time that 144 training perts cannot support a 4M-parameter model.
+Wallclock 1176s, near the 1200s cap.
 
 ## Priors earned so far in this run
 
@@ -101,22 +145,59 @@ still on the list.
   the zero-padded positions' noise. A fallback (back-off to multi-hot
   only when FM absent) was not tried yet; the `program.md`
   "LA + scGPT combination" idea is not fully explored.
-- **Capacity scaling overfits at 144 training perts.** The training
-  set is small; 0.8M params was already enough. Don't re-try without
-  a regularization strategy that actually keeps generalization.
-- **Global weight decay at 1e-4 is too strong.** Either use a smaller
-  coefficient (1e-5, 1e-6) or apply selectively to `f_pert`.
+- **Capacity scaling overfits at 144 training perts — verified twice.**
+  Once with dropout=0.1 (exp 4), once without (exp 11). 0.8M params
+  was already enough; 4M memorizes. Don't re-try at this dataset size
+  without a regularization strategy that actually preserves
+  generalization (e.g., bottleneck on `f_pert` only, not the whole
+  network).
+- **Weight decay is dangerous on `f_pert`.** Global wd=1e-4 was too
+  strong (-0.005). Selective wd=1e-4 on `f_pert` alone caused full
+  mode collapse (-0.29). The cosine_logFC_rank metric is essential
+  here — it flagged the collapse instantly while the cosine was
+  still 0.56 (a value that without context could look "competitive").
+- **Dropout was net-harmful with this training procedure.** Removing
+  it gave +0.013 — the biggest single keep in run 2. The intuition:
+  per-pert-mean training already has zero per-batch noise, ensembling
+  already averages out random initialization variance, so dropout's
+  remaining contribution was just inference-time output blur.
+- **Per-target-gene override transfers from run 1.** The same trick
+  that powered run 1 (override pred[target_gene]) gives a smaller
+  but real lift on top of LA (+0.004). Useful pattern beyond a
+  single pipeline architecture.
 
 ## Open leads from `program.md` not yet tried in this run
 
-- Per-parameter-group weight decay (selective L2 on `f_pert`).
-- Explicit target-gene override stacked on LA output.
+- Smaller weight-decay coefficients (1e-5, 1e-6) — selective on
+  `f_pert` after exp 7's collapse-on-1e-4. Lower priority now.
 - Multiplicative composition for duals (`z_{p1,p2}` interaction
-  terms).
+  terms). Requires architectural change.
 - Per-cell or hybrid per-cell/per-pert training.
 - Ensemble of architectures (LA + the ridge+FM pipeline from
   `main`).
 - Sampled control encoder.
+
+## Where this lands now
+
+Best: **0.869 cosine logFC** (single-run, exp 10). Multi-seed error
+bars in progress via `eval_multiseed_pb.py` to verify robustness
+across base seeds.
+
+PerturBench Table 3 published numbers on the same split:
+- Latent Additive: 0.79 ± 0.01
+- LA + scGPT: 0.77
+- CPA: 0.76 (CPA + scGPT: 0.70)
+- SAMS-VAE + S: 0.78
+- GEARS: 0.44
+- Linear: 0.60
+
+Gap to their best published number: **+0.08 cosine logFC**.
+
+A clean SOTA claim on this benchmark requires reproducing competitor
+methods (LA from PerturBench's codebase, CRISPR-informed mean from
+Wenteler 2025, GEARS, CPA, ideally TxPert from May 2025) through
+this harness or running our pipeline through theirs. Plan tracked
+in the public PR description.
 
 ## Where this lands relative to published work
 
