@@ -156,14 +156,44 @@ class Pipeline:
         n_genes = control_mean.size
         self._control_mean = control_mean
 
+        # Per-target-gene observed delta, for the exp8 output override.
+        # Keys are HVG column indices; value is the median of observed
+        # (post - control) deltas across training perts that targeted
+        # that gene.
+        var_names = list(train_adata.var_names)
+        gene_names = (
+            list(train_adata.var["gene_name"].astype(str))
+            if "gene_name" in train_adata.var.columns else var_names
+        )
+        self._sym_to_hvg = {n: i for i, n in enumerate(var_names)}
+        for i, gn in enumerate(gene_names):
+            self._sym_to_hvg.setdefault(gn, i)
+
+        per_gene_drops: dict[int, list[float]] = {}
+
         X_pert: list[np.ndarray] = []
         Y_target: list[np.ndarray] = []
         for p in train_perts:
             mask = train_adata.obs["perturbation"] == p
             if mask.sum() == 0:
                 continue
+            mean_p = _to_dense_mean(train_adata[mask])
             X_pert.append(self._pert_to_multihot(p))
-            Y_target.append(_to_dense_mean(train_adata[mask]))
+            Y_target.append(mean_p)
+            for sym in _resolve_target_indices(p):
+                hvg = self._sym_to_hvg.get(sym)
+                if hvg is not None:
+                    per_gene_drops.setdefault(hvg, []).append(
+                        float(mean_p[hvg] - control_mean[hvg])
+                    )
+        self._per_gene_delta: dict[int, float] = {
+            g: float(np.median(ds)) for g, ds in per_gene_drops.items()
+        }
+        print(
+            f"la_override: collected per-gene deltas for "
+            f"{len(self._per_gene_delta)} target genes",
+            flush=True,
+        )
 
         if not X_pert:
             raise ValueError("No resolvable training perturbations.")
@@ -224,6 +254,15 @@ class Pipeline:
                     m(C.unsqueeze(0), onehot.unsqueeze(0)).squeeze(0)
                     for m in self.models
                 ]
-                pred = torch.stack(preds).mean(dim=0)
-                out[p] = pred.cpu().numpy()
+                pred = torch.stack(preds).mean(dim=0).cpu().numpy()
+                # exp8: explicit per-target-gene override.
+                for sym in _resolve_target_indices(p):
+                    hvg = self._sym_to_hvg.get(sym)
+                    if hvg is None:
+                        continue
+                    delta = self._per_gene_delta.get(hvg)
+                    if delta is None:
+                        continue
+                    pred[hvg] = float(control_mean[hvg]) + delta
+                out[p] = pred
         return out
